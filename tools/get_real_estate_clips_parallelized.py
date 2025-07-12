@@ -41,11 +41,17 @@ def ffmpeg_extract_clip(input_path, start_s, duration_s, output_path, use_nvenc=
     cmd.append(output_path)
     run_cmd(cmd)
 
-def ffmpeg_frames_to_video(frames_dir, fps, output_path, pattern='%06d.png', use_nvenc=False):
+def ffmpeg_frames_to_video_from_list(frames_dir, fps, output_path, file_list, use_nvenc=False):
+    txt_list = osp.join(frames_dir, "frames.txt")
+    with open(txt_list, "w") as f:
+        for fname in file_list:
+            f.write(f"file '{fname}'\n")
     cmd = [
         'ffmpeg', '-y',
-        '-framerate', str(fps),
-        '-i', osp.join(frames_dir, pattern)
+        '-f', 'concat',
+        '-safe', '0',
+        '-r', str(fps),
+        '-i', txt_list
     ]
     if use_nvenc:
         cmd += ['-c:v', 'h264_nvenc']
@@ -53,20 +59,6 @@ def ffmpeg_frames_to_video(frames_dir, fps, output_path, pattern='%06d.png', use
         cmd += ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']
     cmd.append(output_path)
     run_cmd(cmd)
-
-def detect_pattern(frames_dir):
-    files = [f for f in os.listdir(frames_dir) if f.lower().endswith(('.jpg', '.png'))]
-    if not files:
-        return None
-    files.sort()
-    sample = files[0]
-    import re
-    m = re.match(r'(\D*)(\d+)(\.\w+)', sample)
-    if not m:
-        return files[0]
-    prefix, digits, suffix = m.groups()
-    pattern = f"{prefix}%0{len(digits)}d{suffix}"
-    return pattern
 
 def load_clip_folder_map(map_txt_path):
     mapping = {}
@@ -117,8 +109,8 @@ if __name__ == '__main__':
                 frames_dir = osp.join(args.frame_root, clip_map[clip])
                 if not osp.exists(frames_dir):
                     continue
-                pattern = detect_pattern(frames_dir)
-                if not pattern:
+                file_list = sorted([f for f in os.listdir(frames_dir) if f.lower().endswith(('.jpg', '.png'))])
+                if not file_list:
                     continue
 
                 output_mp4 = osp.join(out_dir, clip + '.mp4')
@@ -126,7 +118,7 @@ if __name__ == '__main__':
                     continue
 
                 try:
-                    ffmpeg_frames_to_video(frames_dir, fps, output_mp4, pattern=pattern, use_nvenc=args.use_nvenc)
+                    ffmpeg_frames_to_video_from_list(frames_dir, fps, output_mp4, file_list, use_nvenc=args.use_nvenc)
                 except Exception:
                     continue
         else:
