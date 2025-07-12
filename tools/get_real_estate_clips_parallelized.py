@@ -41,11 +41,13 @@ def ffmpeg_extract_clip(input_path, start_s, duration_s, output_path, use_nvenc=
     cmd.append(output_path)
     run_cmd(cmd)
 
+import tempfile
+
 def ffmpeg_frames_to_video_from_list(frames_dir, fps, output_path, file_list, use_nvenc=False):
-    txt_list = osp.join(frames_dir, "frames.txt")
-    with open(txt_list, "w") as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        txt_list = f.name
         for fname in file_list:
-            f.write(f"file '{fname}'\n")
+            f.write(f"file '{osp.join(frames_dir, fname)}'\n")
     cmd = [
         'ffmpeg', '-y',
         '-f', 'concat',
@@ -59,6 +61,8 @@ def ffmpeg_frames_to_video_from_list(frames_dir, fps, output_path, file_list, us
         cmd += ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']
     cmd.append(output_path)
     run_cmd(cmd)
+    # Optionally, clean up after use:
+    os.remove(txt_list)
 
 def load_clip_folder_map(map_txt_path):
     mapping = {}
