@@ -29,7 +29,7 @@ conda activate cameractrl
 ### Dataset
 - Download the camera trajectories and videos from [RealEstate10K](https://google.github.io/realestate10k/download.html).
 - Run `tools/gather_realestate.py` to get all the clips for each video.
-- Run `tools/get_realestate_clips.py` to get the video clips from the original videos.
+ - Run `tools/get_realestate_clips.py` to get the video clips from the original videos. If you already extracted frame folders for each clip, provide the `--frame_root` argument to assemble them into videos.
 - Using [LAVIS](https://github.com/salesforce/LAVIS) or other methods to generate a caption for each video clip. We provide our extracted captions in [Google Drive](https://drive.google.com/file/d/1nytBYjTa0bJ-8AMJWVCtKT2XwkJR3Jra/view?usp=share_link) and [Google Drive](https://drive.google.com/file/d/1AGEJYbfip0jcp-ymgU9uCjUHzqETivYP/view?usp=share_link).
 - Run `tools/generate_realestate_json.py` to generate the json files for training and test, you can construct the validation json file by randomly sampling some item from the training json file. 
 - After the above steps, you can get the dataset folder like this
