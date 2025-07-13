@@ -9,17 +9,18 @@ from tqdm import tqdm
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--frame_root', required=True,
-                   help='Root under which clip folders live')
-    p.add_argument('--save_path', required=True)
-    p.add_argument('--video2clip_json', required=True)
-    p.add_argument('--clip_txt_path', required=True)
-    p.add_argument('--clip_folder_map', required=True,
-                   help='Each line "folder/clipname" mapping to frame_root/folder/clipname')
-    p.add_argument('--low_idx', type=int, default=0)
-    p.add_argument('--high_idx', type=int, default=-1)
-    p.add_argument('--gpus', type=int, default=8,
-                   help='Number of GPUs to stripe across')
+    p.add_argument('--frame_root',       required=True)
+    p.add_argument('--save_path',        required=True)
+    p.add_argument('--video2clip_json',  required=True)
+    p.add_argument('--clip_txt_path',    required=True)
+    p.add_argument('--clip_folder_map',  required=True)
+    p.add_argument('--low_idx',          type=int, default=0)
+    p.add_argument('--high_idx',         type=int, default=-1)
+    p.add_argument('--gpus',             type=int, default=8)
+    p.add_argument('--num_machines',     type=int, default=1,
+                   help='Total parallel machines/instances')
+    p.add_argument('--machine_rank',     type=int, default=0,
+                   help='This machine’s rank (0 to num_machines-1)')
     return p.parse_args()
 
 def load_map(path):
@@ -27,19 +28,19 @@ def load_map(path):
     with open(path) as f:
         for L in f:
             line = L.strip()
-            if not line:
-                continue
+            if not line: continue
             folder, clip = line.split('/', 1)
             m[clip] = line
     return m
 
-def process_video(args, vid, clip_list, clip_map, gpu_id):
-    # pin this worker to one GPU
+def process_video(vid, clip_list, clip_map, args, gpu_id):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-
     out_dir = osp.join(args.save_path, vid)
-    os.makedirs(out_dir, exist_ok=True)
+    done_marker = osp.join(out_dir, '.done')
+    if osp.exists(done_marker):
+        return  # already done
 
+    os.makedirs(out_dir, exist_ok=True)
     for clip in clip_list:
         txt = osp.join(args.clip_txt_path, clip + '.txt')
         if not osp.exists(txt):
@@ -52,18 +53,17 @@ def process_video(args, vid, clip_list, clip_map, gpu_id):
             continue
 
         fps = 1e6 / (ts[1] - ts[0])
-
         if clip not in clip_map:
             continue
         frames_dir = osp.join(args.frame_root, clip_map[clip])
         if not osp.isdir(frames_dir):
             continue
 
-        frame_files = sorted([
-            osp.join(frames_dir, x) 
+        frame_files = sorted(
+            osp.join(frames_dir, x)
             for x in os.listdir(frames_dir)
-            if x.lower().endswith(('.jpg', '.png'))
-        ])
+            if x.lower().endswith(('.png', '.jpg'))
+        )
         if not frame_files:
             continue
 
@@ -71,14 +71,14 @@ def process_video(args, vid, clip_list, clip_map, gpu_id):
         if osp.exists(out_mp4):
             continue
 
-        # load all frames into memory (could be large!)
         frames = [imageio.imread(fp) for fp in frame_files]
-        # write video with correct fps
         imageio.mimsave(out_mp4, frames, fps=fps)
 
-        # verify
         vr = VideoReader(out_mp4)
         assert len(vr) == len(frame_files)
+
+    # mark done
+    open(done_marker, 'w').close()
 
 def main():
     args = get_args()
@@ -88,21 +88,29 @@ def main():
     clip_map    = load_map(args.clip_folder_map)
 
     vids = list(video2clips.keys())
+    # apply index slicing
     if args.high_idx != -1:
         vids = vids[args.low_idx:args.high_idx]
     else:
         vids = vids[args.low_idx:]
 
-    # round-robin assign GPU ids to each video
-    assignments = [(vid, video2clips[vid], clip_map, idx % args.gpus)
-                   for idx, vid in enumerate(vids)]
+    # further shard across machines
+    vids = [v for idx, v in enumerate(vids)
+            if idx % args.num_machines == args.machine_rank]
 
-    with ProcessPoolExecutor(max_workers=min(args.gpus, len(assignments))) as exe:
+    # assign each video a GPU in round-robin
+    assignments = [
+        (vid, video2clips[vid], clip_map, i % args.gpus)
+        for i, vid in enumerate(vids)
+    ]
+
+    with ProcessPoolExecutor(max_workers=min(len(assignments), args.gpus)) as exe:
         futures = {
-            exe.submit(process_video, args, vid, clips, clip_map, gpu_id): vid
-            for vid, clips, clip_map, gpu_id in assignments
+            exe.submit(process_video, vid, clips, clip_map, args, gpu): vid
+            for vid, clips, clip_map, gpu in assignments
         }
-        for _ in tqdm(as_completed(futures), total=len(futures), desc='videos'):
+        for _ in tqdm(as_completed(futures),
+                      total=len(futures), desc='videos'):
             pass
 
 if __name__ == '__main__':
